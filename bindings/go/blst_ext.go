@@ -14,16 +14,10 @@ func P2Mult(q *P2, s *Scalar) *P2Affine {
 	return sig
 }
 
-// ScalarMult multiplies two scalar values.
-func ScalarMult(a, b *Scalar) *Scalar {
-	ret := new(Scalar)
-	C.blst_sk_mul_n_check(ret, a, b)
-	return ret
-}
-
-// ScalarAdd adds two scalar values.
-func ScalarAdd(a, b *Scalar) *Scalar {
-	ret := new(Scalar)
-	C.blst_sk_add_n_check(ret, a, b)
-	return ret
+// Build reduced scalar from arbitratry input value.
+func ScalarFromBytes(arr []byte) *Scalar {
+	s := new(Scalar)
+	nbytes := len(arr)
+	C.blst_scalar_from_be_bytes(s, (*C.byte)(&arr[0]), C.size_t(nbytes))
+	return s
 }
