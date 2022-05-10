@@ -14,7 +14,7 @@ func P2Mult(q *P2, s *Scalar) *P2Affine {
 	return sig
 }
 
-// Build reduced scalar from arbitratry input value.
+// Build reduced scalar from arbitrary input value.
 func ScalarFromBytes(arr []byte) *Scalar {
 	s := new(Scalar)
 	nbytes := len(arr)
