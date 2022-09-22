@@ -15,6 +15,24 @@ package blst
 // #cgo mips64 mips64le ppc64 ppc64le riscv64 s390x CFLAGS: -D__BLST_NO_ASM__
 // #include "blst.h"
 //
+// #if defined(__x86_64__) && (defined(__unix__) || defined(__APPLE__))
+// # include <signal.h>
+// # include <unistd.h>
+// static void handler(int signum)
+// {   ssize_t n = write(2, "Caught SIGILL in blst_cgo_init, "
+//                          "consult <blst>/bindings/go/README.md.\n", 70);
+//     _exit(128+SIGILL);
+//     (void)n;
+// }
+// __attribute__((constructor)) static void blst_cgo_init()
+// {   blst_fp temp = { 0 };
+//     struct sigaction act = { handler }, oact;
+//     sigaction(SIGILL, &act, &oact);
+//     blst_fp_sqr(&temp, &temp);
+//     sigaction(SIGILL, &oact, NULL);
+// }
+// #endif
+//
 // static size_t go_pairing_sizeof(size_t DST_len)
 // {   return (blst_pairing_sizeof() + DST_len + sizeof(blst_pairing) - 1) /
 //            sizeof(blst_pairing);
@@ -32,24 +50,59 @@ package blst
 // {   *pt = *blst_pairing_as_fp12(ctx);   }
 //
 // static void go_p1slice_to_affine(blst_p1_affine dst[],
-//                                    const blst_p1 points[], size_t npoints)
+//                                  const blst_p1 points[], size_t npoints)
 // {   const blst_p1 *ppoints[2] = { points, NULL };
 //     blst_p1s_to_affine(dst, ppoints, npoints);
 // }
 // static void go_p1slice_add(blst_p1 *dst, const blst_p1_affine points[],
-//                                            size_t npoints)
+//                                          size_t npoints)
 // {   const blst_p1_affine *ppoints[2] = { points, NULL };
 //     blst_p1s_add(dst, ppoints, npoints);
 // }
 // static void go_p2slice_to_affine(blst_p2_affine dst[],
-//                                    const blst_p2 points[], size_t npoints)
+//                                  const blst_p2 points[], size_t npoints)
 // {   const blst_p2 *ppoints[2] = { points, NULL };
 //     blst_p2s_to_affine(dst, ppoints, npoints);
 // }
 // static void go_p2slice_add(blst_p2 *dst, const blst_p2_affine points[],
-//                                            size_t npoints)
+//                                          size_t npoints)
 // {   const blst_p2_affine *ppoints[2] = { points, NULL };
 //     blst_p2s_add(dst, ppoints, npoints);
+// }
+//
+// static void go_p1_mult_n_acc(blst_p1 *acc, const blst_fp *x, bool affine,
+//                                            const byte *scalar, size_t nbits)
+// {   blst_p1 m[1];
+//     const void *p = x;
+//     if (p == NULL)
+//         p = blst_p1_generator();
+//     else if (affine)
+//         blst_p1_from_affine(m, p), p = m;
+//     blst_p1_mult(m, p, scalar, nbits);
+//     blst_p1_add_or_double(acc, acc, m);
+// }
+// static void go_p2_mult_n_acc(blst_p2 *acc, const blst_fp2 *x, bool affine,
+//                                            const byte *scalar, size_t nbits)
+// {   blst_p2 m[1];
+//     const void *p = x;
+//     if (p == NULL)
+//         p = blst_p2_generator();
+//     else if (affine)
+//         blst_p2_from_affine(m, p), p = m;
+//     blst_p2_mult(m, p, scalar, nbits);
+//     blst_p2_add_or_double(acc, acc, m);
+// }
+//
+// static bool go_scalar_from_bendian(blst_scalar *ret, const byte *in)
+// {   blst_scalar_from_bendian(ret, in);
+//     return blst_sk_check(ret);
+// }
+// static bool go_hash_to_scalar(blst_scalar *ret,
+//                               const byte *msg, size_t msg_len,
+//                               const byte *DST, size_t DST_len)
+// {   byte elem[48];
+//     blst_expand_message_xmd(elem, sizeof(elem), msg, msg_len, DST, DST_len);
+//     return blst_scalar_from_be_bytes(ret, elem, sizeof(elem));
 // }
 import "C"
 import (
@@ -140,6 +193,92 @@ func KeyGen(ikm []byte, optional ...[]byte) *SecretKey {
 	return &sk
 }
 
+func KeyGenV3(ikm []byte, optional ...[]byte) *SecretKey {
+	if len(ikm) < 32 {
+		return nil
+	}
+	var sk SecretKey
+	var info []byte
+	var infoP *C.byte
+	if len(optional) > 0 {
+		info = optional[0]
+		if len(info) > 0 {
+			infoP = (*C.byte)(&info[0])
+		}
+	}
+	C.blst_keygen_v3(&sk, (*C.byte)(&ikm[0]), C.size_t(len(ikm)),
+		infoP, C.size_t(len(info)))
+	// Postponing secret key zeroing till garbage collection can be too
+	// late to be effective, but every little bit helps...
+	runtime.SetFinalizer(&sk, func(sk *SecretKey) { sk.Zeroize() })
+	return &sk
+}
+
+func KeyGenV45(ikm []byte, salt []byte, optional ...[]byte) *SecretKey {
+	if len(ikm) < 32 {
+		return nil
+	}
+	var sk SecretKey
+	var info []byte
+	var infoP *C.byte
+	if len(optional) > 0 {
+		info = optional[0]
+		if len(info) > 0 {
+			infoP = (*C.byte)(&info[0])
+		}
+	}
+	C.blst_keygen_v4_5(&sk, (*C.byte)(&ikm[0]), C.size_t(len(ikm)),
+		(*C.byte)(&salt[0]), C.size_t(len(salt)),
+		infoP, C.size_t(len(info)))
+	// Postponing secret key zeroing till garbage collection can be too
+	// late to be effective, but every little bit helps...
+	runtime.SetFinalizer(&sk, func(sk *SecretKey) { sk.Zeroize() })
+	return &sk
+}
+
+func KeyGenV5(ikm []byte, salt []byte, optional ...[]byte) *SecretKey {
+	if len(ikm) < 32 {
+		return nil
+	}
+	var sk SecretKey
+	var info []byte
+	var infoP *C.byte
+	if len(optional) > 0 {
+		info = optional[0]
+		if len(info) > 0 {
+			infoP = (*C.byte)(&info[0])
+		}
+	}
+	C.blst_keygen_v5(&sk, (*C.byte)(&ikm[0]), C.size_t(len(ikm)),
+		(*C.byte)(&salt[0]), C.size_t(len(salt)),
+		infoP, C.size_t(len(info)))
+	// Postponing secret key zeroing till garbage collection can be too
+	// late to be effective, but every little bit helps...
+	runtime.SetFinalizer(&sk, func(sk *SecretKey) { sk.Zeroize() })
+	return &sk
+}
+
+func DeriveMasterEip2333(ikm []byte) *SecretKey {
+	if len(ikm) < 32 {
+		return nil
+	}
+	var sk SecretKey
+	C.blst_derive_master_eip2333(&sk, (*C.byte)(&ikm[0]), C.size_t(len(ikm)))
+	// Postponing secret key zeroing till garbage collection can be too
+	// late to be effective, but every little bit helps...
+	runtime.SetFinalizer(&sk, func(sk *SecretKey) { sk.Zeroize() })
+	return &sk
+}
+
+func (master *SecretKey) DeriveChildEip2333(child_index uint32) *SecretKey {
+	var sk SecretKey
+	C.blst_derive_child_eip2333(&sk, master, C.uint(child_index))
+	// Postponing secret key zeroing till garbage collection can be too
+	// late to be effective, but every little bit helps...
+	runtime.SetFinalizer(&sk, func(sk *SecretKey) { sk.Zeroize() })
+	return &sk
+}
+
 //
 // Pairing
 //
@@ -205,6 +344,12 @@ func (pt *Fp12) FinalExp() {
 
 func (pt *Fp12) InGroup() bool {
 	return bool(C.blst_fp12_in_group(pt))
+}
+
+func (pt *Fp12) ToBendian() []byte {
+	var out [BLST_FP_BYTES * 12]byte
+	C.blst_bendian_from_fp12((*C.byte)(&out[0]), pt)
+	return out[:]
 }
 
 //
@@ -1533,20 +1678,87 @@ func (p1 *P1) Compress() []byte {
 	return out[:]
 }
 
-func (p1 *P1) Mult(scalar []byte, optional ...int) *P1 {
+func (p1 *P1) MultAssign(scalarIf interface{}, optional ...int) *P1 {
 	var nbits int
+	var scalar *C.byte
+	switch val := scalarIf.(type) {
+	case []byte:
+		scalar = (*C.byte)(&val[0])
+		nbits = len(val) * 8
+	case *Scalar:
+		scalar = &val.b[0]
+		nbits = 255
+	default:
+		panic(fmt.Sprintf("unsupported type %T", val))
+	}
 	if len(optional) > 0 {
 		nbits = optional[0]
-	} else {
-		nbits = len(scalar) * 8
 	}
-	var ret P1
-	C.blst_p1_mult(&ret, p1, (*C.byte)(&scalar[0]), C.size_t(nbits))
-	return &ret
+	C.blst_p1_mult(p1, p1, scalar, C.size_t(nbits))
+	return p1
+}
+
+func (p1 *P1) Mult(scalarIf interface{}, optional ...int) *P1 {
+	ret := *p1
+	return ret.MultAssign(scalarIf, optional...)
+}
+
+func (p1 *P1) AddAssign(pointIf interface{}) *P1 {
+	switch val := pointIf.(type) {
+	case *P1:
+		C.blst_p1_add_or_double(p1, p1, val)
+	case *P1Affine:
+		C.blst_p1_add_or_double_affine(p1, p1, val)
+	default:
+		panic(fmt.Sprintf("unsupported type %T", val))
+	}
+	return p1
+}
+
+func (p1 *P1) Add(pointIf interface{}) *P1 {
+	ret := *p1
+	return ret.AddAssign(pointIf)
 }
 
 func P1Generator() *P1 {
 	return C.blst_p1_generator()
+}
+
+// 'acc += point * scalar', passing 'nil' for 'point' means "use the
+//                          group generator point"
+func (acc *P1) MultNAccumulate(pointIf interface{}, scalarIf interface{},
+	optional ...int) *P1 {
+	var x *Fp
+	var affine C.bool
+	if pointIf != nil {
+		switch val := pointIf.(type) {
+		case *P1:
+			x = &val.x
+			affine = false
+		case *P1Affine:
+			x = &val.x
+			affine = true
+		default:
+			panic(fmt.Sprintf("unsupported type %T", val))
+		}
+	}
+	var nbits int
+	var scalar *C.byte
+	switch val := scalarIf.(type) {
+	case []byte:
+		scalar = (*C.byte)(&val[0])
+		nbits = len(val) * 8
+	case *Scalar:
+		scalar = &val.b[0]
+		nbits = 255
+	default:
+		panic(fmt.Sprintf("unsupported type %T", val))
+	}
+	if len(optional) > 0 {
+		nbits = optional[0]
+	}
+	C.go_p1_mult_n_acc(acc, x, affine, scalar, C.size_t(nbits))
+	return acc
 }
 
 //
@@ -2153,20 +2365,87 @@ func (p2 *P2) Compress() []byte {
 	return out[:]
 }
 
-func (p2 *P2) Mult(scalar []byte, optional ...int) *P2 {
+func (p2 *P2) MultAssign(scalarIf interface{}, optional ...int) *P2 {
 	var nbits int
+	var scalar *C.byte
+	switch val := scalarIf.(type) {
+	case []byte:
+		scalar = (*C.byte)(&val[0])
+		nbits = len(val) * 8
+	case *Scalar:
+		scalar = &val.b[0]
+		nbits = 255
+	default:
+		panic(fmt.Sprintf("unsupported type %T", val))
+	}
 	if len(optional) > 0 {
 		nbits = optional[0]
-	} else {
-		nbits = len(scalar) * 8
 	}
-	var ret P2
-	C.blst_p2_mult(&ret, p2, (*C.byte)(&scalar[0]), C.size_t(nbits))
-	return &ret
+	C.blst_p2_mult(p2, p2, scalar, C.size_t(nbits))
+	return p2
+}
+
+func (p2 *P2) Mult(scalarIf interface{}, optional ...int) *P2 {
+	ret := *p2
+	return ret.MultAssign(scalarIf, optional...)
+}
+
+func (p2 *P2) AddAssign(pointIf interface{}) *P2 {
+	switch val := pointIf.(type) {
+	case *P2:
+		C.blst_p2_add_or_double(p2, p2, val)
+	case *P2Affine:
+		C.blst_p2_add_or_double_affine(p2, p2, val)
+	default:
+		panic(fmt.Sprintf("unsupported type %T", val))
+	}
+	return p2
+}
+
+func (p2 *P2) Add(pointIf interface{}) *P2 {
+	ret := *p2
+	return ret.AddAssign(pointIf)
 }
 
 func P2Generator() *P2 {
 	return C.blst_p2_generator()
+}
+
+// 'acc += point * scalar', passing 'nil' for 'point' means "use the
+//                          group generator point"
+func (acc *P2) MultNAccumulate(pointIf interface{}, scalarIf interface{},
+	optional ...int) *P2 {
+	var x *Fp2
+	var affine C.bool
+	if pointIf != nil {
+		switch val := pointIf.(type) {
+		case *P2:
+			x = &val.x
+			affine = false
+		case *P2Affine:
+			x = &val.x
+			affine = true
+		default:
+			panic(fmt.Sprintf("unsupported type %T", val))
+		}
+	}
+	var nbits int
+	var scalar *C.byte
+	switch val := scalarIf.(type) {
+	case []byte:
+		scalar = (*C.byte)(&val[0])
+		nbits = len(val) * 8
+	case *Scalar:
+		scalar = &val.b[0]
+		nbits = 255
+	default:
+		panic(fmt.Sprintf("unsupported type %T", val))
+	}
+	if len(optional) > 0 {
+		nbits = optional[0]
+	}
+	C.go_p2_mult_n_acc(acc, x, affine, scalar, C.size_t(nbits))
+	return acc
 }
 
 //
@@ -2643,6 +2922,44 @@ func bytesAllZero(s []byte) bool {
 }
 
 //
+// These methods are inefficient because of cgo call overhead. For this
+// reason they should be used primarily for prototyping with a goal to
+// formulate interfaces that would process multiple scalars per cgo call.
+//
+func (a *Scalar) MulAssign(b *Scalar) (*Scalar, bool) {
+	return a, bool(C.blst_sk_mul_n_check(a, a, b))
+}
+
+func (a *Scalar) Mul(b *Scalar) (*Scalar, bool) {
+	var ret Scalar
+	return &ret, bool(C.blst_sk_mul_n_check(&ret, a, b))
+}
+
+func (a *Scalar) AddAssign(b *Scalar) (*Scalar, bool) {
+	return a, bool(C.blst_sk_add_n_check(a, a, b))
+}
+
+func (a *Scalar) Add(b *Scalar) (*Scalar, bool) {
+	var ret Scalar
+	return &ret, bool(C.blst_sk_add_n_check(&ret, a, b))
+}
+
+func (a *Scalar) SubAssign(b *Scalar) (*Scalar, bool) {
+	return a, bool(C.blst_sk_sub_n_check(a, a, b))
+}
+
+func (a *Scalar) Sub(b *Scalar) (*Scalar, bool) {
+	var ret Scalar
+	return &ret, bool(C.blst_sk_sub_n_check(&ret, a, b))
+}
+
+func (a *Scalar) Inverse() *Scalar {
+	var ret Scalar
+	C.blst_sk_inverse(&ret, a)
+	return &ret
+}
+
+//
 // Serialization/Deserialization.
 //
 
@@ -2654,11 +2971,8 @@ func (s *Scalar) Serialize() []byte {
 }
 
 func (s *Scalar) Deserialize(in []byte) *Scalar {
-	if len(in) != BLST_SCALAR_BYTES {
-		return nil
-	}
-	C.blst_scalar_from_bendian(s, (*C.byte)(&in[0]))
-	if !C.blst_sk_check(s) {
+	if len(in) != BLST_SCALAR_BYTES ||
+		!C.go_scalar_from_bendian(s, (*C.byte)(&in[0])) {
 		return nil
 	}
 	return s
@@ -2679,7 +2993,6 @@ func (s *Scalar) HashTo(msg []byte, dst []byte) bool {
 
 func HashToScalar(msg []byte, dst []byte) *Scalar {
 	var ret Scalar
-	var elem [48]C.byte
 
 	var msgC *C.byte
 	if len(msg) > 0 {
@@ -2691,10 +3004,8 @@ func HashToScalar(msg []byte, dst []byte) *Scalar {
 		dstC = (*C.byte)(&dst[0])
 	}
 
-	C.blst_expand_message_xmd(&elem[0], C.size_t(len(elem)),
-		msgC, C.size_t(len(msg)),
-		dstC, C.size_t(len(dst)))
-	if C.blst_scalar_from_be_bytes(&ret, &elem[0], C.size_t(len(elem))) {
+	if C.go_hash_to_scalar(&ret, msgC, C.size_t(len(msg)),
+		dstC, C.size_t(len(dst))) {
 		return &ret
 	}
 
@@ -2719,11 +3030,8 @@ func (fp *Fp) ToLEndian() []byte {
 
 func (fr *Scalar) FromLEndian(arr []byte) *Scalar {
 	nbytes := len(arr)
-	if nbytes == BLST_SCALAR_BYTES {
-		C.blst_scalar_from_lendian(fr, (*C.byte)(&arr[0]))
-	} else if nbytes > BLST_SCALAR_BYTES {
-		C.blst_scalar_from_le_bytes(fr, (*C.byte)(&arr[0]), C.size_t(nbytes))
-	} else {
+	if nbytes < BLST_SCALAR_BYTES ||
+		!C.blst_scalar_from_le_bytes(fr, (*C.byte)(&arr[0]), C.size_t(nbytes)) {
 		return nil
 	}
 	return fr
@@ -2755,11 +3063,8 @@ func (fp *Fp) ToBEndian() []byte {
 
 func (fr *Scalar) FromBEndian(arr []byte) *Scalar {
 	nbytes := len(arr)
-	if nbytes == BLST_SCALAR_BYTES {
-		C.blst_scalar_from_bendian(fr, (*C.byte)(&arr[0]))
-	} else if nbytes > BLST_SCALAR_BYTES {
-		C.blst_scalar_from_be_bytes(fr, (*C.byte)(&arr[0]), C.size_t(nbytes))
-	} else {
+	if nbytes < BLST_SCALAR_BYTES ||
+		!C.blst_scalar_from_be_bytes(fr, (*C.byte)(&arr[0]), C.size_t(nbytes)) {
 		return nil
 	}
 	return fr
@@ -2878,7 +3183,17 @@ func breakdown(nbits, window, ncpus int) (int, int, int) {
 
 	if nbits > window*ncpus {
 		nx = 1
-		wnd = window - bits.Len(uint(ncpus)/4)
+		wnd = bits.Len(uint(ncpus) / 4)
+		if (window + wnd) > 18 {
+			wnd = window - wnd
+		} else {
+			wnd = (nbits/window + ncpus - 1) / ncpus
+			if (nbits/(window+1)+ncpus-1)/ncpus < wnd {
+				wnd = window + 1
+			} else {
+				wnd = window
+			}
+		}
 	} else {
 		nx = 2
 		wnd = window - 2

@@ -72,11 +72,46 @@ public:
     void keygen(const byte* IKM, size_t IKM_len,
                 const std::string& info = "")
     {   blst_keygen(&key, IKM, IKM_len, C_bytes(info.data()), info.size());   }
+    void keygen_v3(const byte* IKM, size_t IKM_len,
+                   const std::string& info = "")
+    {   blst_keygen_v3(&key, IKM, IKM_len, C_bytes(info.data()), info.size());   }
+    void keygen_v4_5(const byte* IKM, size_t IKM_len,
+                     const byte* salt, size_t salt_len,
+                     const std::string& info = "")
+    {   blst_keygen_v4_5(&key, IKM, IKM_len, salt, salt_len,
+                               C_bytes(info.data()), info.size());
+    }
+    void keygen_v5(const byte* IKM, size_t IKM_len,
+                   const byte* salt, size_t salt_len,
+                   const std::string& info = "")
+    {   blst_keygen_v5(&key, IKM, IKM_len, salt, salt_len,
+                             C_bytes(info.data()), info.size());
+    }
 #if __cplusplus >= 201703L
     void keygen(const app__string_view IKM, // string_view by value, cool!
                 const std::string& info = "")
     {   keygen(C_bytes(IKM.data()), IKM.size(), info);   }
+    void keygen_v3(const app__string_view IKM, // string_view by value, cool!
+                   const std::string& info = "")
+    {   keygen_v3(C_bytes(IKM.data()), IKM.size(), info);   }
+    void keygen_v4_5(const app__string_view IKM, // string_view by value, cool!
+                     const app__string_view salt,
+                     const std::string& info = "")
+    {   keygen_v4_5(C_bytes(IKM.data()), IKM.size(),
+                    C_bytes(salt.data()), salt.size(), info);
+    }
+    void keygen_v5(const app__string_view IKM, // string_view by value, cool!
+                   const app__string_view salt,
+                   const std::string& info = "")
+    {   keygen_v5(C_bytes(IKM.data()), IKM.size(),
+                  C_bytes(salt.data()), salt.size(), info);
+    }
 #endif
+    void derive_master_eip2333(const byte* IKM, size_t IKM_len)
+    {   blst_derive_master_eip2333(&key, IKM, IKM_len);   }
+    void derive_child_eip2333(const SecretKey& SK, unsigned int child_index)
+    {   blst_derive_child_eip2333(&key, &SK.key, child_index);   }
+
     void from_bendian(const byte in[32]) { blst_scalar_from_bendian(&key, in); }
     void from_lendian(const byte in[32]) { blst_scalar_from_lendian(&key, in); }
 
@@ -94,6 +129,24 @@ public:
     Scalar() { memset(&val, 0, sizeof(val)); }
     Scalar(const byte* scalar, size_t nbits)
     {   blst_scalar_from_le_bytes(&val, scalar, (nbits+7)/8);   }
+    Scalar(const byte *msg, size_t msg_len, const std::string& DST)
+    {   (void)hash_to(msg, msg_len, DST);   }
+#if __cplusplus >= 201703L
+    Scalar(const app__string_view msg, const std::string& DST = "")
+    {   (void)hash_to(C_bytes(msg.data()), msg.size(), DST);   }
+#endif
+
+    Scalar* hash_to(const byte *msg, size_t msg_len, const std::string& DST = "")
+    {   byte elem[48];
+        blst_expand_message_xmd(elem, sizeof(elem), msg, msg_len,
+                                                    C_bytes(DST.data()), DST.size());
+        blst_scalar_from_be_bytes(&val, elem, sizeof(elem));
+        return this;
+    }
+#if __cplusplus >= 201703L
+    Scalar* hash_to(const app__string_view msg, const std::string& DST = "")
+    {   return hash_to(C_bytes(msg.data()), msg.size(), DST);   }
+#endif
 
     Scalar dup() const { return *this; }
     Scalar* from_bendian(const byte *msg, size_t msg_len)
@@ -793,12 +846,10 @@ public:
     PT(const P2_Affine& q)  { blst_aggregated_in_g2(&value, q); }
     PT(const P2_Affine& q, const P1_Affine& p)
     {   blst_miller_loop(&value, q, p);   }
-    PT(const P1_Affine& p, const P2_Affine& q)
-    {   blst_miller_loop(&value, q, p);   }
+    PT(const P1_Affine& p, const P2_Affine& q) : PT(q, p) {}
     PT(const P2& q, const P1& p)
     {   blst_miller_loop(&value, P2_Affine(q), P1_Affine(p));   }
-    PT(const P1& p, const P2& q)
-    {   blst_miller_loop(&value, P2_Affine(q), P1_Affine(p));   }
+    PT(const P1& p, const P2& q) : PT(q, p) {}
 
     PT dup() const          { return *this; }
     bool is_one() const     { return blst_fp12_is_one(&value); }
@@ -808,6 +859,8 @@ public:
     PT* mul(const PT& p)    { blst_fp12_mul(&value, &value, p); return this; }
     PT* final_exp()         { blst_final_exp(&value, &value);   return this; }
     bool in_group() const   { return blst_fp12_in_group(&value); }
+    void to_bendian(byte out[48*12]) const
+    {   blst_bendian_from_fp12(out, &value);   }
 
     static bool finalverify(const PT& gt1, const PT& gt2)
     {   return blst_fp12_finalverify(gt1, gt2);   }
@@ -913,7 +966,9 @@ public:
     BLST_ERROR merge(const Pairing* ctx)
     {   return blst_pairing_merge(*this, *ctx);   }
     bool finalverify(const PT* sig = nullptr) const
-    {   return blst_pairing_finalverify(*this, *sig);   }
+    {   return sig == nullptr ? blst_pairing_finalverify(*this, nullptr)
+                              : blst_pairing_finalverify(*this, *sig);
+    }
     void raw_aggregate(const P2_Affine* q, const P1_Affine* p)
     {   blst_pairing_raw_aggregate(*this, *q, *p);   }
     PT as_fp12()

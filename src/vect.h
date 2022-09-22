@@ -69,7 +69,8 @@ typedef limb_t bool_t;
 /*
  * Assembly subroutines...
  */
-#if defined(__ADX__) /* e.g. -march=broadwell */ && !defined(__BLST_PORTABLE__)
+#if defined(__ADX__) /* e.g. -march=broadwell */ && !defined(__BLST_PORTABLE__)\
+                                                 && !defined(__BLST_NO_ASM__)
 # define mul_mont_sparse_256 mulx_mont_sparse_256
 # define sqr_mont_sparse_256 sqrx_mont_sparse_256
 # define from_mont_256 fromx_mont_256
@@ -200,10 +201,6 @@ typedef const void *uptr_t;
 # endif
 #endif
 
-#if defined(__CUDA_ARCH__)
-# define inline inline __device__
-#endif
-
 #if !defined(inline) && !defined(__cplusplus)
 # if !defined(__STDC_VERSION__) || __STDC_VERSION__<199901
 #  if defined(__GNUC__) && __GNUC__>=2
@@ -216,11 +213,25 @@ typedef const void *uptr_t;
 # endif
 #endif
 
+#if defined(__GNUC__) || defined(__clang__)
+# define launder(var) asm volatile("" : "+r"(var))
+#else
+# define launder(var)
+#endif
+
 static inline bool_t is_bit_set(const byte *v, size_t i)
-{   return (v[i/8] >> (i%8)) & 1;   }
+{
+    bool_t ret = (v[i/8] >> (i%8)) & 1;
+    launder(ret);
+    return ret;
+}
 
 static inline bool_t byte_is_zero(unsigned char c)
-{   return ((limb_t)(c) - 1) >> (LIMB_T_BITS - 1);   }
+{
+    limb_t ret = ((limb_t)(c) - 1) >> (LIMB_T_BITS - 1);
+    launder(ret);
+    return ret;
+}
 
 static inline bool_t bytes_are_zero(const unsigned char *a, size_t num)
 {
@@ -231,14 +242,6 @@ static inline bool_t bytes_are_zero(const unsigned char *a, size_t num)
         acc |= a[i];
 
     return byte_is_zero(acc);
-}
-
-static inline void bytes_zero(unsigned char *a, size_t num)
-{
-    size_t i;
-
-    for (i = 0; i < num; i++)
-        a[i] = 0;
 }
 
 static inline void vec_cswap(void *restrict a, void *restrict b, size_t num,
@@ -259,31 +262,19 @@ static inline void vec_cswap(void *restrict a, void *restrict b, size_t num,
 }
 
 /* ret = bit ? a : b */
-#ifdef __CUDA_ARCH__
-extern "C" {
-__device__ void vec_select_48(void *ret, const void *a, const void *b,
-                                         unsigned int sel_a);
-__device__ void vec_select_96(void *ret, const void *a, const void *b,
-                                         unsigned int sel_a);
-__device__ void vec_select_192(void *ret, const void *a, const void *b,
-                                          unsigned int sel_a);
-__device__ void vec_select_144(void *ret, const void *a, const void *b,
-                                          unsigned int sel_a);
-__device__ void vec_select_288(void *ret, const void *a, const void *b,
-                                          unsigned int sel_a);
-}
-#else
+void vec_select_32(void *ret, const void *a, const void *b, bool_t sel_a);
 void vec_select_48(void *ret, const void *a, const void *b, bool_t sel_a);
 void vec_select_96(void *ret, const void *a, const void *b, bool_t sel_a);
 void vec_select_144(void *ret, const void *a, const void *b, bool_t sel_a);
 void vec_select_192(void *ret, const void *a, const void *b, bool_t sel_a);
 void vec_select_288(void *ret, const void *a, const void *b, bool_t sel_a);
-#endif
 static inline void vec_select(void *ret, const void *a, const void *b,
                               size_t num, bool_t sel_a)
 {
+    launder(sel_a);
 #ifndef __BLST_NO_ASM__
-    if (num == 48)          vec_select_48(ret, a, b, sel_a);
+    if (num == 32)          vec_select_32(ret, a, b, sel_a);
+    else if (num == 48)     vec_select_48(ret, a, b, sel_a);
     else if (num == 96)     vec_select_96(ret, a, b, sel_a);
     else if (num == 144)    vec_select_144(ret, a, b, sel_a);
     else if (num == 192)    vec_select_192(ret, a, b, sel_a);
@@ -292,7 +283,8 @@ static inline void vec_select(void *ret, const void *a, const void *b,
     if (0) ;
 #endif
     else {
-        limb_t bi, *rp = (limb_t *)ret;
+        limb_t bi;
+        volatile limb_t *rp = (limb_t *)ret;
         const limb_t *ap = (const limb_t *)a;
         const limb_t *bp = (const limb_t *)b;
         limb_t xorm, mask = (limb_t)0 - sel_a;
@@ -308,13 +300,23 @@ static inline void vec_select(void *ret, const void *a, const void *b,
 }
 
 static inline bool_t is_zero(limb_t l)
-{   return (~l & (l - 1)) >> (LIMB_T_BITS - 1);   }
+{
+    limb_t ret = (~l & (l - 1)) >> (LIMB_T_BITS - 1);
+    launder(ret);
+    return ret;
+}
 
 static inline bool_t vec_is_zero(const void *a, size_t num)
 {
     const limb_t *ap = (const limb_t *)a;
     limb_t acc;
     size_t i;
+
+#ifndef __BLST_NO_ASM__
+    bool_t vec_is_zero_16x(const void *a, size_t num);
+    if ((num & 15) == 0)
+        return vec_is_zero_16x(a, num);
+#endif
 
     num /= sizeof(limb_t);
 
@@ -330,6 +332,12 @@ static inline bool_t vec_is_equal(const void *a, const void *b, size_t num)
     const limb_t *bp = (const limb_t *)b;
     limb_t acc;
     size_t i;
+
+#ifndef __BLST_NO_ASM__
+    bool_t vec_is_equal_16x(const void *a, const void *b, size_t num);
+    if ((num & 15) == 0)
+        return vec_is_equal_16x(a, b, num);
+#endif
 
     num /= sizeof(limb_t);
 
@@ -368,82 +376,9 @@ static inline void vec_zero(void *ret, size_t num)
     for (i = 0; i < num; i++)
         rp[i] = 0;
 
-#if defined(__GNUC__) && !defined(__NVCC__)
+#if defined(__GNUC__) || defined(__clang__)
     asm volatile("" : : "r"(ret) : "memory");
 #endif
-}
-
-static inline void limbs_from_be_bytes(limb_t *restrict ret,
-                                       const unsigned char *in, size_t n)
-{
-    limb_t limb = 0;
-
-    while(n--) {
-        limb <<= 8;
-        limb |= *in++;
-        /*
-         * 'if (n % sizeof(limb_t) == 0)' is omitted because it's cheaper
-         * to perform redundant stores than to pay penalty for
-         * mispredicted branch. Besides, some compilers unroll the
-         * loop and remove redundant stores to 'restict'-ed storage...
-         */
-        ret[n / sizeof(limb_t)] = limb;
-    }
-}
-
-static inline void be_bytes_from_limbs(unsigned char *out, const limb_t *in,
-                                       size_t n)
-{
-    limb_t limb;
-
-    while(n--) {
-        limb = in[n / sizeof(limb_t)];
-        *out++ = (unsigned char)(limb >> (8 * (n % sizeof(limb_t))));
-    }
-}
-
-static inline void limbs_from_le_bytes(limb_t *restrict ret,
-                                       const unsigned char *in, size_t n)
-{
-    limb_t limb = 0;
-
-    while(n--) {
-        limb <<= 8;
-        limb |= in[n];
-        /*
-         * 'if (n % sizeof(limb_t) == 0)' is omitted because it's cheaper
-         * to perform redundant stores than to pay penalty for
-         * mispredicted branch. Besides, some compilers unroll the
-         * loop and remove redundant stores to 'restict'-ed storage...
-         */
-        ret[n / sizeof(limb_t)] = limb;
-    }
-}
-
-static inline void le_bytes_from_limbs(unsigned char *out, const limb_t *in,
-                                       size_t n)
-{
-    const union {
-        long one;
-        char little;
-    } is_endian = { 1 };
-    limb_t limb;
-    size_t i, j, r;
-
-    if ((uptr_t)out == (uptr_t)in && is_endian.little)
-        return;
-
-    r = n % sizeof(limb_t);
-    n /= sizeof(limb_t);
-
-    for(i = 0; i < n; i++) {
-        for (limb = in[i], j = 0; j < sizeof(limb_t); j++, limb >>= 8)
-            *out++ = (unsigned char)limb;
-    }
-    if (r) {
-        for (limb = in[i], j = 0; j < r; j++, limb >>= 8)
-            *out++ = (unsigned char)limb;
-    }
 }
 
 /*

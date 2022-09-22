@@ -1294,10 +1294,35 @@ extern "C" {
     pub fn blst_pairing_as_fp12(ctx: *mut blst_pairing) -> *mut blst_fp12;
 }
 extern "C" {
+    pub fn blst_bendian_from_fp12(out: *mut byte, a: *const blst_fp12);
+}
+extern "C" {
     pub fn blst_keygen_v3(
         out_SK: *mut blst_scalar,
         IKM: *const byte,
         IKM_len: usize,
+        info: *const byte,
+        info_len: usize,
+    );
+}
+extern "C" {
+    pub fn blst_keygen_v4_5(
+        out_SK: *mut blst_scalar,
+        IKM: *const byte,
+        IKM_len: usize,
+        salt: *const byte,
+        salt_len: usize,
+        info: *const byte,
+        info_len: usize,
+    );
+}
+extern "C" {
+    pub fn blst_keygen_v5(
+        out_SK: *mut blst_scalar,
+        IKM: *const byte,
+        IKM_len: usize,
+        salt: *const byte,
+        salt_len: usize,
         info: *const byte,
         info_len: usize,
     );
@@ -1311,4 +1336,28 @@ extern "C" {
         SK: *const blst_scalar,
         child_index: u32,
     );
+}
+extern "C" {
+    pub fn blst_scalar_from_hexascii(out: *mut blst_scalar, hex: *const byte);
+}
+extern "C" {
+    pub fn blst_fr_from_hexascii(ret: *mut blst_fr, hex: *const byte);
+}
+extern "C" {
+    pub fn blst_fp_from_hexascii(ret: *mut blst_fp, hex: *const byte);
+}
+extern "C" {
+    pub fn blst_p1_sizeof() -> usize;
+}
+extern "C" {
+    pub fn blst_p1_affine_sizeof() -> usize;
+}
+extern "C" {
+    pub fn blst_p2_sizeof() -> usize;
+}
+extern "C" {
+    pub fn blst_p2_affine_sizeof() -> usize;
+}
+extern "C" {
+    pub fn blst_fp12_sizeof() -> usize;
 }

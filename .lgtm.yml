@@ -2,6 +2,8 @@ queries:
   - include: "*"
   - exclude: cpp/unused-static-function
   - exclude: cpp/include-non-header
+  - exclude: cs/call-to-unmanaged-code
+  - exclude: cs/unmanaged-code
 
 extraction:
   cpp:
@@ -12,4 +14,8 @@ extraction:
     index:
       build_command:
       - (cd bindings/go; go test -c)
+
+  csharp:
+    index:
+      nuget_restore: false
 

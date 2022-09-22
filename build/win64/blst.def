@@ -200,7 +200,18 @@ EXPORTS
 	blst_p2_unchecked_mult
 	blst_pairing_raw_aggregate
 	blst_pairing_as_fp12
+	blst_bendian_from_fp12
 	blst_keygen_v3
+	blst_keygen_v4_5
+	blst_keygen_v5
 	blst_derive_master_eip2333
 	blst_derive_child_eip2333
+	blst_scalar_from_hexascii
+	blst_fr_from_hexascii
+	blst_fp_from_hexascii
+	blst_p1_sizeof
+	blst_p1_affine_sizeof
+	blst_p2_sizeof
+	blst_p2_affine_sizeof
+	blst_fp12_sizeof
 
